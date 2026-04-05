@@ -1,15 +1,16 @@
 class AuthenticateBotRequest
   PROTECTED_PATHS = [
-    %r{\A/api/v1(/|\z)},
-    %r{\A/bot(/|\z)}
+    %r{\A/api/v1/shops\z},
+    %r{\A/api/v1/seller\z}
   ].freeze
 
   EXCLUDED_PATHS = [
-    /setup-shop/,
-    /\/shop\//,
-    /\/shops\/setup/,
-    /\/shops\/\d+\/products/,
-    /\/products\z/
+    %r{\A/api/v1/shops/setup},
+    %r{\A/webhooks/shop_bot},
+    %r{\Alist-products},
+    %r{\A/api/v1/products},
+    %r{\A/shop/},
+    %r{\A/setup-shop}
   ].freeze
 
   def initialize(app)
@@ -18,17 +19,9 @@ class AuthenticateBotRequest
 
   def call(env)
     request = ActionDispatch::Request.new(env)
-    path = request.path
-    
-    # Check if excluded
-    is_excluded = EXCLUDED_PATHS.any? { |p| p.match?(path) }
-    return @app.call(env) if is_excluded
-    
-    # Check if protected
-    is_protected = PROTECTED_PATHS.any? { |p| p.match?(path) }
-    return @app.call(env) unless is_protected
-    
-    # Authenticate
+    return @app.call(env) if excluded_path?(request.path)
+    return @app.call(env) unless protected_request?(request.path)
+
     token = bearer_token(request)
     return unauthorized unless token
 
@@ -41,8 +34,14 @@ class AuthenticateBotRequest
     env["jwt.payload"] = payload
 
     @app.call(env)
+  rescue JsonWebToken::DecodeError => e
+    Rails.logger.error "JWT DecodeError: #{e.message}"
+    unauthorized
+  rescue NoMethodError => e
+    Rails.logger.error "NoMethodError in middleware: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
+    unauthorized
   rescue => e
-    Rails.logger.error "Auth error: #{e.message}"
+    Rails.logger.error "AuthenticateBotRequest error: #{e.message}"
     unauthorized
   ensure
     Current.reset
@@ -50,13 +49,32 @@ class AuthenticateBotRequest
 
   private
 
+  def protected_request?(path)
+    PROTECTED_PATHS.any? { |matcher| matcher.match?(path) }
+  end
+
+  def excluded_path?(path)
+    EXCLUDED_PATHS.any? { |matcher| matcher.match?(path) }
+  end
+
   def bearer_token(request)
     header = request.get_header("HTTP_AUTHORIZATION").to_s
     scheme, token = header.split(" ", 2)
-    token if scheme == "Bearer" && token.present?
+    return token if scheme == "Bearer" && token.present?
+
+    nil
   end
 
   def unauthorized
-    [401, { "Content-Type" => "application/json" }, [{ error: "Unauthorized" }.to_json]]
+    body = { error: "Unauthorized" }.to_json
+
+    [
+      401,
+      {
+        "Content-Type" => "application/json",
+        "Content-Length" => body.bytesize.to_s
+      },
+      [body]
+    ]
   end
 end
