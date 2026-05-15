@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "https://nam-labradoritic-tawanna.ngrok-free.dev";
+const BASE_URL = import.meta.env.VITE_API_URL;
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
